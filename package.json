@@ -1,0 +1,14 @@
+{
+  "name": "revamp-engine",
+  "private": true,
+  "version": "0.0.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "scan": "node packages/cli/dist/bin/revamp.js scan"
+  },
+  "devDependencies": {}
+}
