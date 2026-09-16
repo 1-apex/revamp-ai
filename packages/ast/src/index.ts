@@ -36,3 +36,4 @@ export {
   type WrapperTag,
   type PresentationalInsertTag,
 } from "./editOps.js";
+export { validateEditBatch, type OpError, type ValidationResult } from "./validator.js";

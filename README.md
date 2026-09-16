@@ -67,7 +67,7 @@ build plan, not a separate afterthought:
 cd packages/ast && npx vitest run
 ```
 
-33 tests across three files, and each one is a specific claim, not a
+52 tests across four files, and each one is a specific claim, not a
 vague "it works":
 
 **`logicSkeleton.test.ts` (8 tests) — the hash:**
@@ -108,6 +108,26 @@ vague "it works":
 - `set_cva_variants` rejects an op that would change nothing
 - a negative path index in an address is rejected
 - `parseEditBatch` accepts a batch of mixed ops and rejects an empty one
+
+**`validator.test.ts` (19 tests) — semantic checks against real file content:**
+- `set_class_list` accepts a resolving address and rejects one that
+  doesn't, and separately rejects a resolving address that points at a
+  Fragment (nowhere to put a className)
+- `set_cva_variants` accepts changing an existing group/option's class
+  string, and rejects an unknown `varName`, a brand-new group, or a
+  brand-new option within an otherwise-real group
+- `wrap_element` accepts a resolving address
+- `insert_presentational` accepts an allowlisted tag at a valid index,
+  rejects an out-of-range `atIndex`, accepts a tag introduced by an
+  `add_import` earlier in the same batch, accepts a tag that's already
+  imported in the file from a prior run, and rejects a tag that's none of
+  those three
+- `add_import` accepts a fresh `localName`, and rejects one that collides
+  with an existing import, an existing top-level declaration, or another
+  `add_import` op in the same batch
+- an op whose `address.file`/`file` doesn't match the batch's file is
+  rejected
+- a batch with two broken ops reports two errors, not just the first one
 
 If any of the "never moves" / "tolerated" tests goes red, the fix is in
 the hash or the fingerprint, never in the test. If a "always moves" /
@@ -190,11 +210,28 @@ Node addressing is done. What's left to finish the edit-op safety layer:
   the validator. 16 new tests (49 total in `@revamp/ast`) cover every op
   parsing when valid and every one of those invariants actually rejecting
   a bad payload, not just accepting a good one.
-- the validator (fingerprint match via `resolveAddress`, cva variant-key
-  immutability, the *diff* check for `wrap_element`/`insert_presentational`
-  described in `editOps.ts` — existing tokens unchanged and in order, only
-  the specific new decorative tokens each op is allowed to add, never a
-  handler or a hook — and same-batch `add_import` collision/shadow checks)
+- ~~the validator~~ **done** (`packages/ast/src/validator.ts`): the
+  file-content-dependent checks the schema couldn't do on its own —
+  `resolveAddress` for every JSX-targeting op (and rejecting a Fragment
+  target for `set_class_list`, since a fragment has nowhere to put a
+  className), cva variant group/option existence read independently
+  through `ts-morph` (same invariant as `cvaVariantKeys()` in
+  `logicSkeleton.ts`, a second toolchain checking it, on purpose),
+  `insert_presentational`'s `atIndex` bounds and its tag resolution
+  (allowlisted, or introduced by an `add_import` earlier in the batch, or
+  already imported in the file), and `add_import` collision checks against
+  existing imports, existing top-level declarations, and other `add_import`
+  ops in the same batch. `validateEditBatch()` checks every op even after
+  an earlier one fails, since the applier's contract is all-or-nothing —
+  the caller should see everything wrong with a batch, not just the first
+  thing. Still not built: the actual *diff* check for
+  `wrap_element`/`insert_presentational` described in `editOps.ts` above
+  (existing tokens unchanged and in order, only specific new decorative
+  tokens added) — that's a job for the applier (next), since only it
+  produces a before/after to diff. 19 new tests (52 total) cover every
+  check above, both accepting a good batch and rejecting a bad one, plus
+  one test confirming a batch with two broken ops reports two errors, not
+  one.
 - the `ts-morph` applier + `tailwind-merge` class-string normalizer, with
   the Phase 0 logic-skeleton hash as the final all-or-nothing per-file gate
 - an adversarial test suite: one test per validator rule that genuinely

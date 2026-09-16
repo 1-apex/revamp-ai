@@ -174,6 +174,17 @@ function walk(root: Node, rootIndex: number, file: string, component: string, ou
   recurse(root, []);
 }
 
+/** Public wrapper for the validator (Phase 1, task #18): how many
+ * significant children a resolved node currently has, so an
+ * insert_presentational op's `atIndex` can be range-checked without that
+ * caller needing to know how "significant" is defined here. Returns 0 for
+ * anything that isn't a JSX container (including a self-closing element,
+ * which by definition has none). */
+export function countSignificantChildren(node: Node): number {
+  if (!isJsxNode(node)) return 0;
+  return getSignificantChildren(node).length;
+}
+
 export function enumerateAddressableNodes(sourceFile: SourceFile, componentName: string): AddressableNode[] {
   const fn = findComponentFunction(sourceFile, componentName);
   if (!fn) return [];
