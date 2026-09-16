@@ -5,23 +5,36 @@ coherent, accessible UI — under a hard guarantee that not one line of
 application logic changes.
 
 Full spec and 9-phase build order (design docs, not code) were written
-before this repo existed; this repo is Phase 0 of that plan, actually
-built and tested, not just described.
+before this repo existed; this repo is Phase 0 (done) and the start of
+Phase 1 of that plan, actually built and tested, not just described.
 
-**Status: Phase 0 only.** There is no editing, no MCP server, and no design
-system generator yet. What exists is the safety instrument everything else
-gets built on: a way to scan a React project and prove, with a hash, that a
-later change did or didn't touch its logic.
+**Status: Phase 0 complete, Phase 1 in progress.** Phase 0 is the safety
+instrument everything else gets built on: a way to scan a React project
+and prove, with a hash, that a later change did or didn't touch its logic.
+Phase 1 is the edit-op safety layer built on top of it — node addressing
+is done and tested; the edit-op schema, validator, applier, and adversarial
+test suite are next. There is still no MCP server and no design system
+generator yet.
 
 ## What's here
 
 ```
 packages/
-  ast/     the logic-skeleton hash — parses a file, strips everything
-           presentational (className, style, cva's class strings), hashes
-           what's left (hooks, handlers, props, conditionals, data flow,
-           component identity). Two files with the same hash are "the same
-           code wearing different clothes."
+  ast/     the safety layer.
+             - logic-skeleton hash: parses a file, strips everything
+               presentational (className, style, cva's class strings),
+               hashes what's left (hooks, handlers, props, conditionals,
+               data flow, component identity). Two files with the same
+               hash are "the same code wearing different clothes."
+             - node addressing: gives every JSX element in a component a
+               stable address (file :: component :: which return-JSX ::
+               positional path) and a fingerprint (tag + non-presentational
+               attribute names + shallow child shape). `resolveAddress`
+               re-locates an address against the CURRENT state of a file
+               and recomputes its fingerprint — this is what every future
+               edit-op will call before touching anything, and it aborts
+               rather than guesses the moment the file has structurally
+               changed underneath it.
   core/    the scanner — detects the stack (React version, Tailwind v4,
            shadcn/ui), finds every component and route, classifies JSX
            elements by role, and infers a product brief from
@@ -32,9 +45,11 @@ packages/
 fixtures/
   fleet-dashboard/   one hand-authored React + Tailwind v4 + shadcn-style
                      fixture (a dashboard with real hooks, real handlers,
-                     real conditional rendering) to scan and hash against.
-                     More fixtures — ideally real open-source repos — are
-                     the first thing to add before Phase 1.
+                     real conditional rendering, three JSX-yielding return
+                     branches, and a `.map()` callback) to scan, hash, and
+                     address against. More fixtures — ideally real
+                     open-source repos — are worth adding before the
+                     validator/applier lean on this one alone.
 ```
 
 ## Try it
@@ -45,15 +60,17 @@ npm run build
 node packages/cli/dist/bin/revamp.js scan ./fixtures/fleet-dashboard
 ```
 
-Run the safety tests — these ARE the Phase 0 stop-and-check from the build
-plan, not a separate afterthought:
+Run the safety tests — these ARE the Phase 0/1 stop-and-checks from the
+build plan, not a separate afterthought:
 
 ```
 cd packages/ast && npx vitest run
 ```
 
-Eight tests, and each one is a specific claim about the hash:
+17 tests across two files, and each one is a specific claim, not a vague
+"it works":
 
+**`logicSkeleton.test.ts` (8 tests) — the hash:**
 - Prettier reformatting (default config, and a very different one —
   narrow width, no semicolons, single quotes) never moves the hash
 - an edit to `className` alone never moves the hash
@@ -62,9 +79,25 @@ Eight tests, and each one is a specific claim about the hash:
 - reordering two independent `useState` calls always moves it
 - the hash is deterministic (same input, same output, always)
 
-If any of the "never moves" tests goes red, the fix is in the hash, never
-in the test. If a "always moves" test goes red, something in the logic
-skeleton stopped being sensitive to a real bug class, which is worse.
+**`addressing.test.ts` (9 tests) — node addressing:**
+- enumeration finds exactly the three JSX-yielding return points in the
+  fixture (the error branch, the loading branch, the main content)
+- enumeration never reaches JSX produced inside a `.map()` callback — a
+  documented v1 scope cut, proven empirically rather than just asserted
+- every enumerated address re-resolves against the same file with a
+  matching fingerprint
+- a `className`-only edit leaves a resolved address's fingerprint
+  unchanged (presentational churn is tolerated)
+- removing a child DOES change the parent's fingerprint (structural
+  changes are caught, not silently absorbed)
+- an out-of-range child index, a vanished root, and an unknown component
+  name each abort with a clear reason instead of resolving to the wrong
+  node or throwing
+
+If any of the "never moves" / "tolerated" tests goes red, the fix is in
+the hash or the fingerprint, never in the test. If a "always moves" /
+"aborts" test goes red, something stopped being sensitive to a real bug
+class, which is worse than a build failure.
 
 ## What was actually found and fixed while building this (kept here on
 purpose, not swept away — this is what "tested," not just "written," means)
@@ -90,6 +123,33 @@ purpose, not swept away — this is what "tested," not just "written," means)
    swallowed the error and returned "not found" for everything. This is
    exactly the kind of bug that "worked when I tried it" and would have
    shipped broken; the fix was a static `import { statSync }` instead.
+4. **ts-morph's real API didn't match the addressing draft's guesses.**
+   Written against assumed names before ever compiling against ts-morph,
+   `addressing.ts` had four mismatches: `ArrowFunctionExpression` isn't
+   exported (it's `ArrowFunction`); `getTagNameNode()` and `getAttributes()`
+   live on `JsxOpeningElement`, not on `JsxElement` itself (a `JsxElement`
+   has to go through `.getOpeningElement()` first — only
+   `JsxSelfClosingElement` carries them directly); and the guard for a
+   `{...}` JSX expression is `Node.isJsxExpression`, not
+   `Node.isJsxExpressionContainer`. None of these were guessable from
+   memory — `tsc` caught all four on the first real build.
+5. **`loadSourceFile`'s "forget the old node, create a new one" semantics
+   is a footgun for anything that holds onto an earlier `SourceFile`
+   handle.** Loading a second version of the same file path into the same
+   `ts-morph` `Project` calls `.forget()` on whatever was there before,
+   which invalidates every `Node` obtained from that earlier handle —
+   touching one throws `InvalidOperationError: Attempted to get
+   information from a node that was removed or forgotten`, not just "gives
+   stale data." Found because the addressing smoke test reused an old
+   `SourceFile` reference after loading two mutated versions over the same
+   path in the same project. **Rule for the applier (Phase 1, next):
+   never hold a `SourceFile`/`Node` reference across a reload of its own
+   path in the same project — re-fetch and re-resolve against the file
+   that was just loaded, every time.** This is exactly the discipline
+   `resolveAddress` already enforces by design (never reuse an old
+   resolution result); the bug was in test code that skipped it, not in
+   `addressing.ts` itself, but it's exactly the class of mistake the real
+   applier must not make.
 
 ## Environment note
 
@@ -102,13 +162,33 @@ terminal on this machine should not need it.
 
 ## Next (Phase 1 — see the build-order doc)
 
-The edit-op safety layer: node addressing with fingerprints, the ten
-allowed operations, the validator, the `ts-morph` applier, and
-`tailwind-merge` normalization. That's the layer that turns "we can prove
-nothing changed" into "we can safely change something."
+Node addressing is done. What's left to finish the edit-op safety layer:
 
-A known, documented limitation to pick up there: the logic-skeleton hash
-does not yet prune purely decorative wrapper elements (e.g. a bare `<div>`
-added only to hold a class), so a future `wrap_element` operation will
-currently register as a hash change. The applier should special-case that
-rather than the hash trying to guess "decorative" in general.
+- the edit-op schema (five ops for v1: `set_class_list`,
+  `set_cva_variants`, `wrap_element`, `insert_presentational`,
+  `add_import`)
+- the validator (fingerprint match via `resolveAddress`, cva variant-key
+  immutability, `wrap`/`insert` ops can't carry props/handlers/children,
+  an import allowlist)
+- the `ts-morph` applier + `tailwind-merge` class-string normalizer, with
+  the Phase 0 logic-skeleton hash as the final all-or-nothing per-file gate
+- an adversarial test suite: one test per validator rule that genuinely
+  tries to break it, plus "one illegal op in a batch reverts the whole
+  file"
+- `revamp apply` on the CLI (dry-run diff by default, `--write` to commit)
+  proven end-to-end on the fleet-dashboard fixture
+
+A known, documented limitation carried over from Phase 0: the
+logic-skeleton hash does not yet prune purely decorative wrapper elements
+(e.g. a bare `<div>` added only to hold a class), so a future
+`wrap_element` operation will currently register as a hash change. The
+applier should special-case that rather than the hash trying to guess
+"decorative" in general.
+
+A known, documented limitation in node addressing itself: an address only
+reaches JSX that is a positional descendant of a component's own return
+value. JSX produced inside a callback (`.map(v => <Card/>)`, and similar)
+is not addressable yet — it still renders, this engine just can't target
+it with an edit-op until the addressing scheme grows a notion of "inside
+this specific callback." That's Phase 1b work, proven by test to be a
+scope cut and not an accidental gap.
