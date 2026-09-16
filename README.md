@@ -67,8 +67,8 @@ build plan, not a separate afterthought:
 cd packages/ast && npx vitest run
 ```
 
-17 tests across two files, and each one is a specific claim, not a vague
-"it works":
+33 tests across three files, and each one is a specific claim, not a
+vague "it works":
 
 **`logicSkeleton.test.ts` (8 tests) — the hash:**
 - Prettier reformatting (default config, and a very different one —
@@ -93,6 +93,21 @@ cd packages/ast && npx vitest run
 - an out-of-range child index, a vanished root, and an unknown component
   name each abort with a clear reason instead of resolving to the wrong
   node or throwing
+
+**`editOps.test.ts` (16 tests) — the edit-op schema:**
+- all five op shapes parse when their payload is valid
+- an op whose `op` field isn't one of the five known strings is rejected
+- `wrap_element` rejects a `wrapperTag` outside the allowlist (a real
+  element like `button`, not just a nonsense string)
+- `insert_presentational` rejects anything shaped like an event handler,
+  and separately rejects an attribute name that isn't on the
+  presentational allowlist even if it isn't handler-shaped (e.g. `href`)
+- `add_import` rejects a source outside the allowlist, accepts one under
+  an allowlisted prefix (`@/components/ui/*`), and rejects a `localName`
+  that isn't a valid identifier
+- `set_cva_variants` rejects an op that would change nothing
+- a negative path index in an address is rejected
+- `parseEditBatch` accepts a batch of mixed ops and rejects an empty one
 
 If any of the "never moves" / "tolerated" tests goes red, the fix is in
 the hash or the fingerprint, never in the test. If a "always moves" /
@@ -164,12 +179,22 @@ terminal on this machine should not need it.
 
 Node addressing is done. What's left to finish the edit-op safety layer:
 
-- the edit-op schema (five ops for v1: `set_class_list`,
-  `set_cva_variants`, `wrap_element`, `insert_presentational`,
-  `add_import`)
+- ~~the edit-op schema~~ **done** (`packages/ast/src/editOps.ts`): five
+  zod-validated op shapes — `set_class_list`, `set_cva_variants`,
+  `wrap_element`, `insert_presentational`, `add_import` — plus a
+  `parseEditBatch()` entry point. As much "is this even legal" as
+  possible is enforced in the schema itself (wrapper/insert tag
+  allowlists, a presentational-attribute allowlist with a handler-name
+  regex as defense in depth, an import-source allowlist, identifier-shaped
+  local names, "an op must actually change something"), not deferred to
+  the validator. 16 new tests (49 total in `@revamp/ast`) cover every op
+  parsing when valid and every one of those invariants actually rejecting
+  a bad payload, not just accepting a good one.
 - the validator (fingerprint match via `resolveAddress`, cva variant-key
-  immutability, `wrap`/`insert` ops can't carry props/handlers/children,
-  an import allowlist)
+  immutability, the *diff* check for `wrap_element`/`insert_presentational`
+  described in `editOps.ts` — existing tokens unchanged and in order, only
+  the specific new decorative tokens each op is allowed to add, never a
+  handler or a hook — and same-batch `add_import` collision/shadow checks)
 - the `ts-morph` applier + `tailwind-merge` class-string normalizer, with
   the Phase 0 logic-skeleton hash as the final all-or-nothing per-file gate
 - an adversarial test suite: one test per validator rule that genuinely
