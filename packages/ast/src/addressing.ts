@@ -7,6 +7,7 @@ import type {
   JsxElement,
   JsxSelfClosingElement,
   JsxFragment,
+  JsxOpeningElement,
 } from "ts-morph";
 
 /**
@@ -64,7 +65,7 @@ function unwrapParens(node: Node): Node {
  * these constantly, so counting them would make addresses shift on every
  * reformat. Everything else (elements, fragments, expressions, and any
  * JsxText with real content) counts. */
-function getSignificantChildren(node: JsxNode): Node[] {
+export function getSignificantChildren(node: JsxNode): Node[] {
   if (Node.isJsxSelfClosingElement(node)) return [];
   const children = node.getJsxChildren();
   return children.filter((c) => {
@@ -81,11 +82,24 @@ function tagNameOf(node: JsxNode): string {
 
 /** JsxElement keeps its attributes on the opening tag; JsxSelfClosingElement
  * carries them directly. Fragments have none. Normalizing here means every
- * other function can just ask "what are this node's attribute names." */
+ * other function can just ask "what are this node's attribute names" (or,
+ * via `attributesHolder` below, where to read/write one). */
 function attributeNamesOf(node: JsxNode): string[] {
   if (Node.isJsxFragment(node)) return [];
   const attrs = Node.isJsxSelfClosingElement(node) ? node.getAttributes() : node.getOpeningElement().getAttributes();
   return attrs.map((a: Node) => (Node.isJsxAttribute(a) ? a.getNameNode().getText() : "{...spread}"));
+}
+
+/** The same JsxElement/JsxSelfClosingElement normalization as
+ * `attributeNamesOf`, but returning the actual attributes-holder node (the
+ * thing `.getAttribute()` / `.addAttribute()` live on) instead of just
+ * names — what the validator's className check and the applier's
+ * set_class_list / insert_presentational mutations both need. A fragment
+ * has nowhere to put an attribute, so it's not in this function's domain;
+ * callers that might see one (anything working from `isJsxCapable`, not
+ * just `canHaveClassName`) check for it separately. */
+export function attributesHolder(node: JsxElement | JsxSelfClosingElement): JsxOpeningElement | JsxSelfClosingElement {
+  return Node.isJsxSelfClosingElement(node) ? node : node.getOpeningElement();
 }
 
 function childKindLabel(node: Node): string {

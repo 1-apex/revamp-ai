@@ -77,6 +77,31 @@ describe("validateEditBatch — set_class_list", () => {
     expect(result.ok).toBe(false);
     expect(result.errors[0].reason).toMatch(/does not match batch file/);
   });
+
+  it("rejects a className that's a dynamic expression, not a plain string literal", () => {
+    // The real fixture's own Badge: className={cn(badgeVariants({status}), className)}.
+    const file = "badge.tsx";
+    const source = `
+      export function Badge({ className, status, ...props }) {
+        return <span className={cn(badgeVariants({ status }), className)} {...props} />;
+      }
+    `;
+    const sf = projectFor(file, source);
+    const span = enumerateAddressableNodes(sf, "Badge")[0]!;
+    const batch: EditBatch = { file: span.address.file, ops: [{ op: "set_class_list", address: span.address, className: "p-2" }] };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].reason).toMatch(/not a plain string literal/);
+  });
+
+  it("accepts a node with no existing className at all", () => {
+    const file = "plain.tsx";
+    const source = `export default function Foo() { return <div><span>hi</span></div>; }`;
+    const sf = projectFor(file, source);
+    const span = enumerateAddressableNodes(sf, "Foo").find((n) => n.fingerprint.startsWith("element:span:"))!;
+    const batch: EditBatch = { file: span.address.file, ops: [{ op: "set_class_list", address: span.address, className: "p-2" }] };
+    expect(validateEditBatch(sf, batch)).toEqual({ ok: true, errors: [] });
+  });
 });
 
 describe("validateEditBatch — set_cva_variants", () => {
@@ -131,6 +156,41 @@ describe("validateEditBatch — set_cva_variants", () => {
     const result = validateEditBatch(sf, batch);
     expect(result.ok).toBe(false);
     expect(result.errors[0].reason).toMatch(/option "intent.tertiary" does not exist/);
+  });
+
+  it("rejects introducing a base string where the call has none (single-argument cva form)", () => {
+    const singleArgFile = "single.tsx";
+    const singleArgSource = `
+      import { cva } from "class-variance-authority";
+      export const x = cva({ variants: { intent: { primary: "bg-blue-600" } } });
+    `;
+    const sf = projectFor(singleArgFile, singleArgSource);
+    const batch: EditBatch = {
+      file: singleArgFile,
+      ops: [{ op: "set_cva_variants", file: singleArgFile, varName: "x", base: "inline-flex" }],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].reason).toMatch(/has no existing base class-string argument/);
+  });
+
+  it("rejects a variant value that isn't a plain string literal", () => {
+    const dynFile = "dynamic.tsx";
+    const dynSource = `
+      import { cva } from "class-variance-authority";
+      const extra = "bg-blue-600";
+      export const buttonVariants = cva("inline-flex", {
+        variants: { intent: { primary: extra } },
+      });
+    `;
+    const sf = projectFor(dynFile, dynSource);
+    const batch: EditBatch = {
+      file: dynFile,
+      ops: [{ op: "set_cva_variants", file: dynFile, varName: "buttonVariants", variants: { intent: { primary: "bg-indigo-600" } } }],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].reason).toMatch(/not a plain string literal/);
   });
 });
 
@@ -211,6 +271,92 @@ describe("validateEditBatch — insert_presentational", () => {
     const batch: EditBatch = {
       file: dashboardPath,
       ops: [{ op: "insert_presentational", parentAddress: headerRow.address, atIndex: 0, tag: "Button" }],
+    };
+    expect(validateEditBatch(sf, batch)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("rejects a self-closing parent — no body to insert into", () => {
+    const file = "selfclosing.tsx";
+    const source = `export default function Foo() { return <div><img src="/a.png" /></div>; }`;
+    const sf = projectFor(file, source);
+    const img = enumerateAddressableNodes(sf, "Foo").find((n) => n.fingerprint.startsWith("element:img:"))!;
+    const batch: EditBatch = {
+      file: img.address.file,
+      ops: [{ op: "insert_presentational", parentAddress: img.address, atIndex: 0, tag: "hr" }],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].reason).toMatch(/self-closing and has no body/);
+  });
+});
+
+describe("validateEditBatch — batch-level structural constraints", () => {
+  it("rejects a batch with more than one structure-extending op", () => {
+    const sf = projectFor(dashboardPath, dashboardSource);
+    const nodes = enumerateAddressableNodes(sf, "FleetDashboard");
+    const h1 = nodes.find((n) => n.fingerprint.startsWith("element:h1:"))!;
+    const headerRow = nodes.find((n) => n.address.root === 2 && n.address.path.length === 1 && n.address.path[0] === 0)!;
+    const batch: EditBatch = {
+      file: dashboardPath,
+      ops: [
+        { op: "wrap_element", address: h1.address, wrapperTag: "span" },
+        { op: "insert_presentational", parentAddress: headerRow.address, atIndex: 0, tag: "hr" },
+      ],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors.every((e) => e.reason.match(/at most one structure-extending op/))).toBe(true);
+  });
+
+  it("rejects set_class_list targeting the exact node a wrap_element in the same batch wraps", () => {
+    const sf = projectFor(dashboardPath, dashboardSource);
+    const h1 = enumerateAddressableNodes(sf, "FleetDashboard").find((n) => n.fingerprint.startsWith("element:h1:"))!;
+    const batch: EditBatch = {
+      file: dashboardPath,
+      ops: [
+        { op: "wrap_element", address: h1.address, wrapperTag: "span" },
+        { op: "set_class_list", address: h1.address, className: "text-3xl" },
+      ],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.reason.match(/isn't stable until that op has actually landed/))).toBe(true);
+  });
+
+  it("rejects an op addressing a sibling at-or-after an insert_presentational's atIndex in the same batch", () => {
+    const sf = projectFor(dashboardPath, dashboardSource);
+    const nodes = enumerateAddressableNodes(sf, "FleetDashboard");
+    const headerRow = nodes.find((n) => n.address.root === 2 && n.address.path.length === 1 && n.address.path[0] === 0)!;
+    // headerRow's children are [h1, Button] at indices 0 and 1; inserting at
+    // index 0 shifts both — the Button at index 1 is exactly the kind of
+    // address this should catch.
+    const button = nodes.find(
+      (n) => n.address.root === 2 && n.address.path.length === 2 && n.address.path[0] === 0 && n.address.path[1] === 1
+    )!;
+    const batch: EditBatch = {
+      file: dashboardPath,
+      ops: [
+        { op: "insert_presentational", parentAddress: headerRow.address, atIndex: 0, tag: "hr" },
+        { op: "set_class_list", address: button.address, className: "ml-2" },
+      ],
+    };
+    const result = validateEditBatch(sf, batch);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.reason.match(/isn't stable until that op has actually landed/))).toBe(true);
+  });
+
+  it("still accepts an insert_presentational alongside an unrelated set_class_list in the same batch", () => {
+    const sf = projectFor(dashboardPath, dashboardSource);
+    const nodes = enumerateAddressableNodes(sf, "FleetDashboard");
+    const headerRow = nodes.find((n) => n.address.root === 2 && n.address.path.length === 1 && n.address.path[0] === 0)!;
+    const h1 = nodes.find((n) => n.fingerprint.startsWith("element:h1:"))!;
+    const batch: EditBatch = {
+      file: dashboardPath,
+      ops: [
+        { op: "insert_presentational", parentAddress: headerRow.address, atIndex: 2, tag: "hr" },
+        { op: "set_class_list", address: h1.address, className: "text-3xl" },
+      ],
     };
     expect(validateEditBatch(sf, batch)).toEqual({ ok: true, errors: [] });
   });

@@ -174,7 +174,18 @@ export function extractLogicSkeleton(source: string, filename: string): LogicSke
       if (init && t.isCallExpression(init) && calleeName(init.callee) === "cva") {
         const varName = t.isIdentifier(path.node.id) ? path.node.id.name : "anon";
         push(`cva-var:${varName}:${cvaVariantKeys(init)}`);
-        path.get("init").skip();
+        // NOTE: `path.get("init").skip()` looks equivalent to skipping this
+        // path's own children but isn't — Babel only honors `.skip()` on
+        // the path a visitor is CURRENTLY entering, not one fetched via
+        // `.get()` from a different node's handler (confirmed by direct
+        // repro; this call was a no-op and the cva call's own class
+        // strings were leaking into the hash as `str:` tokens, silently
+        // breaking set_cva_variants's hash-preserving guarantee — found
+        // while building the Phase 1 applier). `path.skip()` here skips
+        // this VariableDeclarator's children (`id` and `init` both); `id`
+        // is harmless to drop since the Identifier visitor already
+        // excludes a declarator's own `id` position (see below).
+        path.skip();
         return;
       }
       push(`var:${idPatternNames(path.node.id as any).join(",")}`);
@@ -214,7 +225,10 @@ export function extractLogicSkeleton(source: string, filename: string): LogicSke
         // handled at the VariableDeclarator level when assigned; if a cva()
         // call shows up unassigned, still record its variant keys here.
         push(cvaVariantKeys(path.node));
-        path.get("arguments").forEach((a) => a.skip());
+        // Same fix as the VariableDeclarator branch above: skip this node's
+        // OWN children (callee + arguments), not a `.get("arguments")`
+        // child path — that form doesn't actually suppress traversal.
+        path.skip();
         return;
       }
       if (isHookName(name)) {

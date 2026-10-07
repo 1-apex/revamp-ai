@@ -3,3 +3,7 @@ dist/
 *.log
 .DS_Store
 .revamp/runs/
+
+# Local-only phase writeups (what was built and why, per phase). Not part
+# of the repo's history on purpose — see README.md's "What's here" intro.
+docs/
