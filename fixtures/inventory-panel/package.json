@@ -1,0 +1,12 @@
+{
+  "name": "inventory-panel",
+  "private": true,
+  "description": "A warehouse inventory panel: search items, see live stock counts, flag low-stock SKUs for reorder.",
+  "version": "0.1.0",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "class-variance-authority": "^0.7.0",
+    "tailwindcss": "^4.0.0"
+  }
+}

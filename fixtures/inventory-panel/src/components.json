@@ -1,0 +1,5 @@
+{
+  "style": "default",
+  "tailwind": { "css": "src/app.css", "baseColor": "neutral" },
+  "aliases": { "components": "@/components", "utils": "@/lib/utils" }
+}

@@ -11,14 +11,16 @@ local-only — not part of this repo's history) for the long-form writeup of
 each phase: what was built, why specific decisions were made, and what was
 found and fixed along the way.
 
-**Status: Phase 0 and Phase 1 complete.** Phase 0 is the safety instrument
-everything else gets built on: a way to scan a React project and prove,
-with a hash, that a later change did or didn't touch its logic. Phase 1 is
-the edit-op safety layer built on top of it: node addressing, a
-zod-validated five-op schema, a validator, and a `ts-morph` applier with
-`tailwind-merge` class normalization that actually lands an edit and proves
-the result still honors whichever guarantee that op belongs to. There is
-still no MCP server and no design system generator yet — that's Phase 2.
+**Status: Phase 0 and Phase 1 complete, Phase 2 in progress.** Phase 0 is
+the safety instrument everything else gets built on: a way to scan a React
+project and prove, with a hash, that a later change did or didn't touch
+its logic. Phase 1 is the edit-op safety layer built on top of it: node
+addressing, a zod-validated five-op schema, a validator, and a `ts-morph`
+applier with `tailwind-merge` class normalization that actually lands an
+edit and proves the result still honors whichever guarantee that op
+belongs to. Phase 2 is the integration layer: a second fixture (done),
+`revamp apply` on the CLI (next), then the MCP server. There is still no
+design system generator yet.
 
 ## What's here
 
@@ -69,9 +71,18 @@ fixtures/
                      fixture (a dashboard with real hooks, real handlers,
                      real conditional rendering, three JSX-yielding return
                      branches, and a `.map()` callback) to scan, hash,
-                     address, validate, and apply edits against. More
-                     fixtures — ideally real open-source repos — are
-                     worth adding before Phase 2 leans on this one alone.
+                     address, validate, and apply edits against.
+  inventory-panel/   a second hand-authored fixture, deliberately shaped to
+                     hit patterns the first one doesn't: a
+                     `React.memo(React.forwardRef(...))` double-wrapped
+                     primitive, a single-argument `cva({...})` call (no
+                     base string), a named (non-default) export page under
+                     `pages/` instead of `routes/`, and JSX nested inside a
+                     ternary's branches rather than only an early `return`.
+                     Adding it is what surfaced a real scanner/addressing
+                     gap (forwardRef components were invisible) by *using*
+                     the existing fixture, not by reading the code — see
+                     "What was actually found and fixed" below.
 ```
 
 ## Try it
@@ -87,10 +98,11 @@ build plan, not a separate afterthought:
 
 ```
 cd packages/ast && npx vitest run
+cd packages/core && npx vitest run
 ```
 
-76 tests across five files, and each one is a specific claim, not a
-vague "it works":
+88 tests across six files (83 in `@revamp/ast`, 5 in `@revamp/core`), and
+each one is a specific claim, not a vague "it works":
 
 **`logicSkeleton.test.ts` (8 tests) — the hash:**
 - Prettier reformatting (default config, and a very different one —
@@ -101,7 +113,7 @@ vague "it works":
 - reordering two independent `useState` calls always moves it
 - the hash is deterministic (same input, same output, always)
 
-**`addressing.test.ts` (9 tests) — node addressing:**
+**`addressing.test.ts` (16 tests) — node addressing:**
 - enumeration finds exactly the three JSX-yielding return points in the
   fixture (the error branch, the loading branch, the main content)
 - enumeration never reaches JSX produced inside a `.map()` callback — a
@@ -110,6 +122,15 @@ vague "it works":
   matching fingerprint
 - a `className`-only edit leaves a resolved address's fingerprint
   unchanged (presentational churn is tolerated)
+- finds and re-resolves JSX inside a `React.forwardRef(...)`-wrapped
+  component, and recurses through a doubly-wrapped
+  `React.memo(React.forwardRef(...))` one, but still aborts for a wrapper
+  name outside that small allowlist (a custom HOC)
+- against the second fixture (`inventory-panel`): finds a named,
+  non-default export's single root, never enumerates JSX nested inside a
+  ternary's branches (the same scope cut as `.map()`, now proven against a
+  second shape of the same gap), and still enumerates the sibling content
+  that sits outside the ternary, unaffected by it
 - removing a child DOES change the parent's fingerprint (structural
   changes are caught, not silently absorbed)
 - an out-of-range child index, a vanished root, and an unknown component
@@ -181,6 +202,18 @@ vague "it works":
 - a batch mixing a hash-preserving op with the one allowed structural op
   applies cleanly under the token-diff gate; two structural ops in one
   batch are rejected by the validator before anything is mutated
+
+**`@revamp/core`'s `components.test.ts` (5 tests) — this package's first
+test file, added alongside the forwardRef fix below:**
+- finds a `React.forwardRef((props, ref) => ...)` component in the real
+  `fleet-dashboard` fixture, and a doubly-wrapped
+  `React.memo(React.forwardRef(...))` one
+- still ignores a lowercase-named variable even if it's forwardRef-wrapped
+  (not a component), and doesn't unwrap an arbitrary call — only the
+  `forwardRef`/`memo` allowlist, never a custom HOC
+- `scanAllComponents` against the real fixture finds all seven components
+  (one route, six primitives) — six, not five, now that `Button` is
+  counted
 
 If any of the "never moves" / "tolerated" tests goes red, the fix is in
 the hash or the fingerprint, never in the test. If a "always moves" /
@@ -262,6 +295,29 @@ purpose, not swept away — this is what "tested," not just "written," means)
    making the hash stricter (and `set_cva_variants` falsely rejected as
    logic-changing) rather than unsafe. Still a bug worth finding before
    Phase 2 builds an MCP server on top of a guarantee that didn't hold.
+7. **`forwardRef`-wrapped components — the standard shape for essentially
+   every real shadcn/ui primitive — were entirely invisible to the scanner
+   and to node addressing.** `const Button = React.forwardRef((props, ref)
+   => {...})` has its render function nested inside a `CallExpression`
+   argument, not sitting directly in the `VariableDeclarator`'s `init`;
+   both `components.ts`'s component-finding traversal and
+   `addressing.ts`'s `findComponentFunction` only matched an arrow/function
+   expression assigned *directly*. Found not by code review but by using
+   the project's own existing fixture while adding a second one: `revamp
+   scan ./fixtures/fleet-dashboard` had always reported 5 shadcn
+   primitives and never fingerprinted `button.tsx` at all, for a component
+   that has been sitting in the fixture since Phase 0. `Button` wasn't an
+   edge case nobody had tried — it was the fixture's own `Button`,
+   unexercised because nothing before Phase 2 happened to call
+   `enumerateAddressableNodes` or `scanAllComponents` with that specific
+   component name and actually check the result. Fixed by a small,
+   recursive unwrap (`forwardRef`/`React.forwardRef`/`memo`/`React.memo`
+   only — a fixed allowlist, not "any call wrapping a function", since
+   there's no general way to know an arbitrary HOC doesn't change a
+   component's shape) added independently to both `components.ts` and
+   `addressing.ts`, since the two have never shared this kind of
+   AST-walking logic. `@revamp/core` got its first test file
+   (`components.test.ts`) directly out of this fix.
 
 ## Environment note
 
@@ -310,18 +366,24 @@ care — see `docs/phase-1-edit-safety-layer.md` for the full reasoning:
 ## Next (Phase 2 — see the build-order doc)
 
 Phase 0 and Phase 1 are both done and tested: scan → hash → address →
-validate → apply, with the fleet-dashboard fixture exercised end-to-end at
-every layer. What's next, per the original plan:
+validate → apply, with two fixtures now exercised end-to-end at every
+layer. What's left in Phase 2, in the order being built:
 
+- ~~a second fixture~~ **done** (`fixtures/inventory-panel/`) — chosen
+  specifically to hit patterns `fleet-dashboard` doesn't (see "What's
+  here" above), which is what surfaced the `forwardRef` bug in the
+  "found and fixed" list. Hand-authored rather than a vendored real
+  open-source repo, on purpose: no licensing/attribution surface, no
+  network dependency, and every pattern it exercises is a deliberate,
+  named choice rather than whatever a real repo happened to contain.
+- `revamp apply` on the CLI (dry-run diff by default, `--write` to commit)
+  so a batch can be proven end-to-end without an AI in the loop, the same
+  way `revamp scan` already lets Phase 0 be checked — **next**
 - the MCP server that actually surfaces `scanProject` /
   `enumerateAddressableNodes` / `parseEditBatch` / `validateEditBatch` /
   `applyEditBatch` as tools a host agent can call, instead of only being
-  reachable by importing `@revamp/ast` / `@revamp/core` directly
-- `revamp apply` on the CLI (dry-run diff by default, `--write` to commit)
-  so a batch can be proven end-to-end without an AI in the loop, the same
-  way `revamp scan` already lets Phase 0 be checked
+  reachable by importing `@revamp/ast` / `@revamp/core` directly — after
+  `revamp apply`, so the same apply path gets proven on the CLI first
 - the design-system generator — this repo doesn't have one yet; everything
   so far is the safety layer a generator's output would need to pass
-  through
-- more fixtures, ideally real open-source repos, before any of the above
-  leans on `fleet-dashboard` alone
+  through; not part of this phase

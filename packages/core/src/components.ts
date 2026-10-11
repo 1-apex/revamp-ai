@@ -61,6 +61,32 @@ function isHookName(name: string): boolean {
   return /^use[A-Z0-9]/.test(bare);
 }
 
+/** Same allowlist and reasoning as `addressing.ts`'s
+ * `COMPONENT_WRAPPER_NAMES` — kept as an independent copy rather than a
+ * shared import because `@revamp/core` only depends on `@revamp/ast` for
+ * `parseSource`, and this list is small enough that two copies staying in
+ * sync by inspection is cheaper than a new shared export just for this. */
+const COMPONENT_WRAPPER_NAMES = new Set(["forwardRef", "React.forwardRef", "memo", "React.memo"]);
+
+/** `const Button = React.forwardRef((props, ref) => {...})` has its render
+ * function nested inside a call expression, not sitting directly in
+ * `init` — the standard shadcn/ui primitive shape. Works on the NodePath,
+ * not just the raw node, so the result's `.get("body")` stays usable by
+ * `analyzeFunctionBody`. Recurses so `memo(forwardRef(fn))` resolves too. */
+function unwrapComponentFunctionPath(
+  path: import("@babel/traverse").NodePath<t.Node>
+): import("@babel/traverse").NodePath<t.ArrowFunctionExpression | t.FunctionExpression> | undefined {
+  const node = path.node;
+  if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) return path as any;
+  if (t.isCallExpression(node)) {
+    const name = calleeName(node.callee as t.Expression);
+    if (name && COMPONENT_WRAPPER_NAMES.has(name) && node.arguments.length > 0) {
+      return unwrapComponentFunctionPath((path as any).get("arguments.0"));
+    }
+  }
+  return undefined;
+}
+
 /** Scan one file for React components. A "component" here is any
  * top-level function whose name starts with a capital letter and whose
  * body contains at least one JSX element — good enough for this engine's
@@ -133,13 +159,9 @@ export function scanComponentsInFile(file: string, rootDir: string): ComponentIn
     VariableDeclarator(path) {
       const id = path.node.id;
       const init = path.node.init;
-      if (
-        t.isIdentifier(id) &&
-        looksLikeComponentName(id.name) &&
-        init &&
-        (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init))
-      ) {
-        analyzeFunctionBody(id.name, (path.get("init") as any).get("body"));
+      if (t.isIdentifier(id) && looksLikeComponentName(id.name) && init) {
+        const fnPath = unwrapComponentFunctionPath(path.get("init") as import("@babel/traverse").NodePath<t.Node>);
+        if (fnPath) analyzeFunctionBody(id.name, fnPath.get("body"));
       }
     },
     ExportDefaultDeclaration(path) {

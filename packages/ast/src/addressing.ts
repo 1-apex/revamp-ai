@@ -128,6 +128,31 @@ export function computeFingerprint(node: Node): string {
   return `other:${node.getKindName()}`;
 }
 
+/** Names of the only wrappers a component's render function is unwrapped
+ * through — `forwardRef`/`React.forwardRef` and `memo`/`React.memo`, in
+ * either nesting order (`memo(forwardRef(fn))` is the common shadcn/ui
+ * shape; `forwardRef(memo(fn))` is unusual but not invalid). Anything else
+ * wrapping the function (a custom HOC) is out of scope — there is no
+ * general way to know a given HOC "just" wraps a component without
+ * changing its shape, so this stays a fixed, small allowlist rather than
+ * unwrapping any call whose argument happens to be a function. */
+const COMPONENT_WRAPPER_NAMES = new Set(["forwardRef", "React.forwardRef", "memo", "React.memo"]);
+
+/** `const Button = React.forwardRef((props, ref) => {...})` has its render
+ * function nested inside a call expression, not sitting directly in
+ * `init` — far and away the most common real-world shape for a shadcn/ui
+ * primitive, confirmed by this project's own fleet-dashboard fixture
+ * (`Button`), which `findComponentFunction` could not see at all before
+ * this unwrap existed. Recurses so `memo(forwardRef(fn))` resolves too. */
+function unwrapComponentFunction(node: Node | undefined): ArrowFunction | FunctionExpression | undefined {
+  if (!node) return undefined;
+  if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) return node;
+  if (Node.isCallExpression(node) && COMPONENT_WRAPPER_NAMES.has(node.getExpression().getText())) {
+    return unwrapComponentFunction(node.getArguments()[0]);
+  }
+  return undefined;
+}
+
 function findComponentFunction(
   sourceFile: SourceFile,
   componentName: string
@@ -141,8 +166,8 @@ function findComponentFunction(
     .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
     .find((v) => v.getName() === componentName);
   if (varDecl) {
-    const init = varDecl.getInitializer();
-    if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return init;
+    const fn = unwrapComponentFunction(varDecl.getInitializer());
+    if (fn) return fn;
   }
   return undefined;
 }
