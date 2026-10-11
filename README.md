@@ -18,9 +18,9 @@ its logic. Phase 1 is the edit-op safety layer built on top of it: node
 addressing, a zod-validated five-op schema, a validator, and a `ts-morph`
 applier with `tailwind-merge` class normalization that actually lands an
 edit and proves the result still honors whichever guarantee that op
-belongs to. Phase 2 is the integration layer: a second fixture (done),
-`revamp apply` on the CLI (next), then the MCP server. There is still no
-design system generator yet.
+belongs to. Phase 2 is the integration layer: a second fixture and
+`revamp apply`/`revamp addresses` on the CLI are done; the MCP server is
+next. There is still no design system generator yet.
 
 ## What's here
 
@@ -63,9 +63,19 @@ packages/
            shadcn/ui), finds every component and route, classifies JSX
            elements by role, and infers a product brief from
            package.json / README / route names. Never writes anything.
-  cli/     `revamp scan <path>` — prints what core+ast find. Also the
-           harness every later phase gets tested against without needing
-           an AI in the loop.
+  cli/     three commands, together the harness every phase gets tested
+           against without needing an AI in the loop:
+             - `revamp scan <path>` — prints what core+ast find.
+             - `revamp addresses <file> <component>` — lists every
+               addressable JSX node ({root, path} + fingerprint) in one
+               component. The only way to discover the exact values an
+               edit batch's address fields need, short of reading
+               `addressing.ts`'s output in a debugger.
+             - `revamp apply <batchFile>` — validates and applies an edit
+               batch (a JSON file shaped like `{file, ops}`). Dry-run by
+               default (prints a unified diff via the `diff` package,
+               writes nothing); `--write` actually lands it. `--json` on
+               any command prints the raw result instead of a summary.
 fixtures/
   fleet-dashboard/   one hand-authored React + Tailwind v4 + shadcn-style
                      fixture (a dashboard with real hooks, real handlers,
@@ -376,14 +386,27 @@ layer. What's left in Phase 2, in the order being built:
   open-source repo, on purpose: no licensing/attribution surface, no
   network dependency, and every pattern it exercises is a deliberate,
   named choice rather than whatever a real repo happened to contain.
-- `revamp apply` on the CLI (dry-run diff by default, `--write` to commit)
-  so a batch can be proven end-to-end without an AI in the loop, the same
-  way `revamp scan` already lets Phase 0 be checked — **next**
+- ~~`revamp apply` on the CLI~~ **done**: dry-run diff by default
+  (rendered with the `diff` package — a presentation-only dependency;
+  the actual safety gate stays the hand-rolled, tested logic in
+  `applier.ts`), `--write` to commit, `--json` for the raw result. Proven
+  end-to-end by hand against both fixtures: a hash-preserving
+  `set_class_list`, a structure-extending `wrap_element`, a batch
+  rejected by the validator (bad address), and a batch rejected by the
+  schema (bad `wrapperTag`) — each one checked for the right diff, the
+  right exit code, and that nothing was written when it shouldn't be.
+  Came with a companion command, `revamp addresses <file> <component>`,
+  added because there was no other way to discover the `{root, path}`
+  values a batch's address fields need without reading `addressing.ts`'s
+  output in a debugger — without it, `apply` couldn't be used end-to-end
+  by a human at all. See docs/phase-2-fixtures-apply-and-mcp.md for the
+  full design writeup (path normalization, why a diff library here but
+  not in `applier.ts`, the CLI's own test-by-hand philosophy).
 - the MCP server that actually surfaces `scanProject` /
   `enumerateAddressableNodes` / `parseEditBatch` / `validateEditBatch` /
   `applyEditBatch` as tools a host agent can call, instead of only being
-  reachable by importing `@revamp/ast` / `@revamp/core` directly — after
-  `revamp apply`, so the same apply path gets proven on the CLI first
+  reachable by importing `@revamp/ast` / `@revamp/core` directly, or by a
+  human typing `revamp apply` — **next**
 - the design-system generator — this repo doesn't have one yet; everything
   so far is the safety layer a generator's output would need to pass
   through; not part of this phase

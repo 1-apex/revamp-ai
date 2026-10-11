@@ -2,16 +2,20 @@
   "name": "@revamp/cli",
   "version": "0.0.1",
   "type": "module",
-  "bin": { "revamp": "dist/bin/revamp.js" },
+  "bin": {
+    "revamp": "dist/bin/revamp.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@revamp/core": "0.0.1",
     "@revamp/ast": "0.0.1",
-    "commander": "^12.1.0"
+    "@revamp/core": "0.0.1",
+    "commander": "^12.1.0",
+    "diff": "^5.2.2"
   },
   "devDependencies": {
+    "@types/diff": "^5.2.3",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   }
