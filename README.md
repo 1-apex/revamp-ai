@@ -5,22 +5,26 @@ coherent, accessible UI — under a hard guarantee that not one line of
 application logic changes.
 
 Full spec and 9-phase build order (design docs, not code) were written
-before this repo existed; this repo is Phase 0 and Phase 1 of that plan,
-actually built and tested, not just described. See `docs/` (gitignored,
-local-only — not part of this repo's history) for the long-form writeup of
-each phase: what was built, why specific decisions were made, and what was
-found and fixed along the way.
+before this repo existed; this repo is Phase 0, Phase 1, and Phase 2 of
+that plan, actually built and tested, not just described. See `docs/`
+(gitignored, local-only — not part of this repo's history) for the
+long-form writeup of each phase: what was built, why specific decisions
+were made, and what was found and fixed along the way.
 
-**Status: Phase 0 and Phase 1 complete, Phase 2 in progress.** Phase 0 is
-the safety instrument everything else gets built on: a way to scan a React
-project and prove, with a hash, that a later change did or didn't touch
-its logic. Phase 1 is the edit-op safety layer built on top of it: node
+**Status: Phase 0, Phase 1, and Phase 2 complete.** Phase 0 is the safety
+instrument everything else gets built on: a way to scan a React project
+and prove, with a hash, that a later change did or didn't touch its
+logic. Phase 1 is the edit-op safety layer built on top of it: node
 addressing, a zod-validated five-op schema, a validator, and a `ts-morph`
 applier with `tailwind-merge` class normalization that actually lands an
 edit and proves the result still honors whichever guarantee that op
-belongs to. Phase 2 is the integration layer: a second fixture and
-`revamp apply`/`revamp addresses` on the CLI are done; the MCP server is
-next. There is still no design system generator yet.
+belongs to. Phase 2 is the integration layer: a second fixture,
+`revamp apply`/`revamp addresses` on the CLI, and an MCP server
+(`@revamp/mcp`) that surfaces the same four operations — scan, list
+addresses, validate, apply — as tools a host agent calls directly, over
+stdio, instead of only reachable by importing the packages or shelling
+out to the CLI. There is still no design system generator yet — that's
+Phase 3+.
 
 ## What's here
 
@@ -76,6 +80,18 @@ packages/
                default (prints a unified diff via the `diff` package,
                writes nothing); `--write` actually lands it. `--json` on
                any command prints the raw result instead of a summary.
+  mcp/     an MCP server (`bin/revamp-mcp.js`, stdio) wrapping the exact
+           same four operations as four tools: `scan_project`,
+           `list_addresses`, `validate_batch`, `apply_batch` (the last
+           two share one zod schema — `AbsoluteEditBatchSchema` — rather
+           than redefining the batch shape a third time). No new logic of
+           its own; every handler is a thin, directly-tested wrapper
+           around `@revamp/ast`/`@revamp/core`. Every path argument must
+           be absolute — unlike the CLI, which resolves a relative one
+           against a human's visible CWD, an MCP server's own working
+           directory isn't something the calling host agent can see.
+           `apply_batch`'s `write` defaults to `false`, the same
+           default-safe posture as the CLI's `--write` flag.
 fixtures/
   fleet-dashboard/   one hand-authored React + Tailwind v4 + shadcn-style
                      fixture (a dashboard with real hooks, real handlers,
@@ -101,18 +117,44 @@ fixtures/
 npm install
 npm run build
 node packages/cli/dist/bin/revamp.js scan ./fixtures/fleet-dashboard
+node packages/cli/dist/bin/revamp.js addresses ./fixtures/fleet-dashboard/src/routes/FleetDashboard.tsx FleetDashboard
+node packages/cli/dist/bin/revamp.js apply my-batch.json       # dry-run diff
+node packages/cli/dist/bin/revamp.js apply my-batch.json --write
 ```
 
-Run the safety tests — these ARE the Phase 0/1 stop-and-checks from the
+To run the MCP server directly (reads/writes JSON-RPC over stdio — not
+meant to be typed at by a human, shown here just to confirm it starts):
+
+```
+node packages/mcp/dist/bin/revamp-mcp.js
+```
+
+To register it with an MCP-aware client, point the client's config at
+that same binary, e.g. in a `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "revamp-engine": {
+      "command": "node",
+      "args": ["/absolute/path/to/packages/mcp/dist/bin/revamp-mcp.js"]
+    }
+  }
+}
+```
+
+Run the safety tests — these ARE the Phase 0/1/2 stop-and-checks from the
 build plan, not a separate afterthought:
 
 ```
 cd packages/ast && npx vitest run
 cd packages/core && npx vitest run
+cd packages/mcp && npx vitest run
 ```
 
-88 tests across six files (83 in `@revamp/ast`, 5 in `@revamp/core`), and
-each one is a specific claim, not a vague "it works":
+99 tests across seven files (83 in `@revamp/ast`, 5 in `@revamp/core`,
+11 in `@revamp/mcp`), and each one is a specific claim, not a vague
+"it works":
 
 **`logicSkeleton.test.ts` (8 tests) — the hash:**
 - Prettier reformatting (default config, and a very different one —
@@ -224,6 +266,25 @@ test file, added alongside the forwardRef fix below:**
 - `scanAllComponents` against the real fixture finds all seven components
   (one route, six primitives) — six, not five, now that `Button` is
   counted
+
+**`@revamp/mcp`'s `server.test.ts` (11 tests) — the one genuinely new
+kind of surface in this project, verified by actually connecting a real
+MCP `Client` to the real server over `InMemoryTransport`, not by asserting
+on the handler functions directly:**
+- `tools/list` exposes exactly the four tools this phase set out to wrap
+- `scan_project` scans the real fixture correctly, and is rejected — as a
+  normal `isError` result, not a broken connection — for a relative
+  `projectPath`
+- `list_addresses` finds an `h1` in `FleetDashboard` and the JSX root
+  inside the forwardRef-wrapped `Button`
+- `validate_batch` accepts a legal batch, rejects one whose address
+  doesn't resolve, and is rejected at the schema boundary (before
+  `validateEditBatch` ever runs) for a relative file path
+- `apply_batch` against a throwaway copy of the fixture (never the
+  tracked file itself): a dry run returns a diff and leaves the file on
+  disk untouched (read back and compared byte-for-byte), `write: true`
+  actually writes it, and a rejected batch writes nothing regardless of
+  `write`
 
 If any of the "never moves" / "tolerated" tests goes red, the fix is in
 the hash or the fingerprint, never in the test. If a "always moves" /
@@ -373,11 +434,12 @@ care — see `docs/phase-1-edit-safety-layer.md` for the full reasoning:
   produced inside a `.map()` callback isn't addressable yet — Phase 1b
   work if it turns out to matter in practice.
 
-## Next (Phase 2 — see the build-order doc)
+## Next (Phase 3 — see the build-order doc)
 
-Phase 0 and Phase 1 are both done and tested: scan → hash → address →
-validate → apply, with two fixtures now exercised end-to-end at every
-layer. What's left in Phase 2, in the order being built:
+Phase 0, Phase 1, and Phase 2 are all done and tested: scan → hash →
+address → validate → apply, reachable from a terminal (`revamp`) or from
+a host agent (`@revamp/mcp`), with two fixtures exercised end-to-end at
+every layer. What Phase 2 actually built, in the order it was built:
 
 - ~~a second fixture~~ **done** (`fixtures/inventory-panel/`) — chosen
   specifically to hit patterns `fleet-dashboard` doesn't (see "What's
@@ -402,11 +464,29 @@ layer. What's left in Phase 2, in the order being built:
   by a human at all. See docs/phase-2-fixtures-apply-and-mcp.md for the
   full design writeup (path normalization, why a diff library here but
   not in `applier.ts`, the CLI's own test-by-hand philosophy).
-- the MCP server that actually surfaces `scanProject` /
-  `enumerateAddressableNodes` / `parseEditBatch` / `validateEditBatch` /
-  `applyEditBatch` as tools a host agent can call, instead of only being
-  reachable by importing `@revamp/ast` / `@revamp/core` directly, or by a
-  human typing `revamp apply` — **next**
+- ~~the MCP server~~ **done** (`@revamp/mcp`, `bin/revamp-mcp.js`, stdio):
+  four tools — `scan_project`, `list_addresses`, `validate_batch`,
+  `apply_batch` — each one a thin wrapper that reads a file and calls
+  straight into `@revamp/ast`/`@revamp/core`; no new logic of its own.
+  Every path argument must be absolute (`AbsolutePathSchema`,
+  `AbsoluteEditBatchSchema`) — an MCP server's own working directory
+  isn't something the calling host agent can see or control, unlike a
+  human running the CLI from a known directory, so there's no safe
+  default to resolve a relative one against. `apply_batch`'s `write`
+  defaults to `false`, same posture as the CLI's `--write`. Verified by
+  connecting a real `Client` to the real server over `InMemoryTransport`
+  (11 tests — see above) and by a raw stdio JSON-RPC smoke test against
+  the actual compiled binary, not just the in-memory harness. Full
+  design writeup — the MCP SDK API decisions, why `registerTool`'s own
+  schema validation was relied on rather than re-validating by hand, the
+  `isError`-result-not-a-thrown-exception lesson — in
+  docs/phase-2-fixtures-apply-and-mcp.md.
+
+Phase 3+ — not started, out of scope for this phase:
+
 - the design-system generator — this repo doesn't have one yet; everything
-  so far is the safety layer a generator's output would need to pass
-  through; not part of this phase
+  built in Phases 0-2 is the safety layer a generator's output would need
+  to pass through
+- the skill pack the root of this README mentions (a Claude Code / Claude
+  Desktop skill that actually drives the MCP server end-to-end for a real
+  restyle)
