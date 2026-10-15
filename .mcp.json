@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "revamp-engine": {
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/packages/mcp/dist/bin/revamp-mcp.js"]
+    }
+  }
+}

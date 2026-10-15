@@ -5,13 +5,13 @@ coherent, accessible UI — under a hard guarantee that not one line of
 application logic changes.
 
 Full spec and 9-phase build order (design docs, not code) were written
-before this repo existed; this repo is Phase 0, Phase 1, and Phase 2 of
-that plan, actually built and tested, not just described. See `docs/`
+before this repo existed; this repo is Phase 0 through Phase 3 of that
+plan, actually built and tested, not just described. See `docs/`
 (gitignored, local-only — not part of this repo's history) for the
 long-form writeup of each phase: what was built, why specific decisions
 were made, and what was found and fixed along the way.
 
-**Status: Phase 0, Phase 1, and Phase 2 complete.** Phase 0 is the safety
+**Status: Phase 0 through Phase 3 complete.** Phase 0 is the safety
 instrument everything else gets built on: a way to scan a React project
 and prove, with a hash, that a later change did or didn't touch its
 logic. Phase 1 is the edit-op safety layer built on top of it: node
@@ -23,8 +23,14 @@ belongs to. Phase 2 is the integration layer: a second fixture,
 (`@revamp/mcp`) that surfaces the same four operations — scan, list
 addresses, validate, apply — as tools a host agent calls directly, over
 stdio, instead of only reachable by importing the packages or shelling
-out to the CLI. There is still no design system generator yet — that's
-Phase 3+.
+out to the CLI. Phase 3 is the skill pack this project's own one-line
+description promised: an AI-driven Claude Code skill (`/revamp`) that
+drives those four tools end-to-end — deciding a design direction, then
+discovering addresses, previewing, and landing edits one file at a time —
+rather than a second, deterministic design-system generator (see
+`docs/phase-3-skill-pack.md` for why that tradeoff was made explicitly).
+There is still no deterministic generator — that's Phase 4+, if it's
+ever built.
 
 ## What's here
 
@@ -109,6 +115,16 @@ fixtures/
                      gap (forwardRef components were invisible) by *using*
                      the existing fixture, not by reading the code — see
                      "What was actually found and fixed" below.
+.claude/skills/
+  revamp/  the skill pack: `SKILL.md` (manual-invoke only — `/revamp`,
+           deliberately not auto-triggered — walks through deciding a
+           design direction, then discovering addresses, previewing, and
+           landing edits via the four MCP tools above, one file at a
+           time) + `reference-design-direction.md` (how to pick a
+           palette/type-scale/spacing rhythm that's expressible entirely
+           in Tailwind utilities + existing theme tokens — none of the
+           five ops can touch the theme file itself). No new logic to
+           test; every tool it calls already has its own test coverage.
 ```
 
 ## Try it
@@ -129,19 +145,33 @@ meant to be typed at by a human, shown here just to confirm it starts):
 node packages/mcp/dist/bin/revamp-mcp.js
 ```
 
-To register it with an MCP-aware client, point the client's config at
-that same binary, e.g. in a `.mcp.json`:
+This repo's root `.mcp.json` already registers it for Claude Code, using
+`${CLAUDE_PROJECT_DIR:-.}` so the same config works regardless of where the
+repo is cloned:
 
 ```json
 {
   "mcpServers": {
     "revamp-engine": {
       "command": "node",
-      "args": ["/absolute/path/to/packages/mcp/dist/bin/revamp-mcp.js"]
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/packages/mcp/dist/bin/revamp-mcp.js"]
     }
   }
 }
 ```
+
+In an interactive session, Claude Code shows a one-time workspace-trust
+prompt before a checked-in `.mcp.json`'s servers actually start — until
+that's accepted, `revamp-engine`'s tools (and the `/revamp` skill below,
+which depends on them) won't be available. Once trusted, this loads
+automatically on every session in this repo.
+
+With that configured and the project built, the skill pack
+(`.claude/skills/revamp/`) is available as `/revamp` — manual-invoke only,
+on purpose (see `docs/phase-3-skill-pack.md`). It drives the same four
+tools end-to-end: decide a design direction, then discover addresses,
+preview, and land edits one file at a time, never touching a file any
+other way.
 
 Run the safety tests — these ARE the Phase 0/1/2 stop-and-checks from the
 build plan, not a separate afterthought:
@@ -434,12 +464,13 @@ care — see `docs/phase-1-edit-safety-layer.md` for the full reasoning:
   produced inside a `.map()` callback isn't addressable yet — Phase 1b
   work if it turns out to matter in practice.
 
-## Next (Phase 3 — see the build-order doc)
+## What Phase 2 and Phase 3 built (see the build-order doc)
 
-Phase 0, Phase 1, and Phase 2 are all done and tested: scan → hash →
-address → validate → apply, reachable from a terminal (`revamp`) or from
-a host agent (`@revamp/mcp`), with two fixtures exercised end-to-end at
-every layer. What Phase 2 actually built, in the order it was built:
+Phase 0, Phase 1, Phase 2, and Phase 3 are all done: scan → hash →
+address → validate → apply, reachable from a terminal (`revamp`), from a
+host agent (`@revamp/mcp`), or driven end-to-end by an LLM (`/revamp`),
+with two fixtures exercised at every layer. What Phase 2 built, in the
+order it was built:
 
 - ~~a second fixture~~ **done** (`fixtures/inventory-panel/`) — chosen
   specifically to hit patterns `fleet-dashboard` doesn't (see "What's
@@ -482,11 +513,35 @@ every layer. What Phase 2 actually built, in the order it was built:
   `isError`-result-not-a-thrown-exception lesson — in
   docs/phase-2-fixtures-apply-and-mcp.md.
 
-Phase 3+ — not started, out of scope for this phase:
+Phase 3 — the skill pack (`.claude/skills/revamp/`) — **done**:
 
-- the design-system generator — this repo doesn't have one yet; everything
-  built in Phases 0-2 is the safety layer a generator's output would need
-  to pass through
-- the skill pack the root of this README mentions (a Claude Code / Claude
-  Desktop skill that actually drives the MCP server end-to-end for a real
-  restyle)
+- `SKILL.md`, manual-invoke only (`disable-model-invocation: true` —
+  deliberately not auto-triggered by an ambiguous "make this look better";
+  see docs/phase-3-skill-pack.md for the asymmetry-of-cost reasoning).
+  Walks through deciding a design direction from the scan's product brief,
+  then per file: `list_addresses` → build one batch → `validate_batch` →
+  `apply_batch` dry-run → show the diff and get confirmation →
+  `apply_batch` with `write: true`. Never edits a file any other way.
+- `reference-design-direction.md` — a concrete heuristic for choosing a
+  palette/type-scale/spacing rhythm, grounded in the one real tooling
+  boundary that shapes it: **no edit op can touch the Tailwind theme
+  file**, so a direction has to be expressible entirely in Tailwind's
+  built-in utilities, arbitrary values, or existing theme tokens.
+- A root `.mcp.json` (`${CLAUDE_PROJECT_DIR:-.}`-relative, portable
+  regardless of where the repo is cloned) registering `revamp-engine` for
+  Claude Code, so the skill pack is self-contained — clone, `npm install
+  && npm run build`, accept the one-time workspace-trust prompt, and
+  `/revamp` works.
+- Chosen deliberately over a second, deterministic design-system-generator
+  package: a rule-based generator would be unit-testable the way every
+  other package here is, but "distinctive, coherent, accessible" for a
+  *specific* codebase's specific product is a contextual judgment call,
+  not a formula — see docs/phase-3-skill-pack.md for the full tradeoff,
+  named honestly rather than hidden (this phase's correctness isn't
+  verifiable by a test suite the way Phases 0-2's was).
+
+Phase 4+ — not started, out of scope for this phase:
+
+- a deterministic design-system-generator package, if one ever turns out
+  to be worth building alongside the AI-driven skill rather than instead
+  of it
