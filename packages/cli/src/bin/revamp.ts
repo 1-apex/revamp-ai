@@ -14,6 +14,7 @@ import {
   type EditBatch,
   type EditOp,
 } from "@revamp/ast";
+import { generateForProject } from "@revamp/generator";
 
 const program = new Command();
 program
@@ -235,6 +236,62 @@ program
     } else {
       console.log(`Dry run — nothing written. Pass --write to apply this change to ${relPath}.`);
     }
+  });
+
+program
+  .command("generate")
+  .description(
+    "deterministically pick a design direction (color re-hueing + radius normalization — no AI involved) and " +
+      "preview or apply it across a project. Dry-run by default; --write lands every generated batch."
+  )
+  .argument("<projectPath>", "path to the React project")
+  .option("--write", "write every generated batch to disk (default: dry-run diff only)")
+  .option("--json", "print the raw plan (direction + batches) as JSON instead of diffs")
+  .action((projectPath: string, opts: { write?: boolean; json?: boolean }) => {
+    const rootDir = path.resolve(process.cwd(), projectPath);
+    const plan = generateForProject(rootDir);
+
+    if (opts.json) {
+      console.log(JSON.stringify(plan, null, 2));
+      return;
+    }
+
+    console.log(`\nrevamp generate — ${rootDir}`);
+    console.log(
+      `design direction: ${plan.direction.name} (neutral=${plan.direction.neutral}, primary=${plan.direction.primary}, danger=${plan.direction.danger}, radius=${plan.direction.radius})\n`
+    );
+
+    if (plan.batches.length === 0) {
+      console.log("Every file already matches this direction — nothing to change.\n");
+      return;
+    }
+
+    let anyRejected = false;
+    for (const batch of plan.batches) {
+      const relPath = path.relative(rootDir, batch.file);
+      const originalSource = readFileSync(batch.file, "utf8");
+      const project = createInMemoryProject();
+      const sourceFile = loadSourceFile(project, batch.file, originalSource);
+      const result = applyEditBatch(sourceFile, batch.file, batch);
+
+      if (!result.ok) {
+        anyRejected = true;
+        console.error(`[${relPath}] rejected:`);
+        for (const e of result.errors) console.error(`  [op ${e.opIndex}] ${e.op}: ${e.reason}`);
+        continue;
+      }
+      if (result.code === originalSource) continue; // the generator already guards against this; kept as a second check, consistent with `apply`
+
+      console.log(createPatch(relPath, originalSource, result.code, "before", opts.write ? "after (written)" : "after (dry run)"));
+      if (opts.write) writeFileSync(batch.file, result.code);
+    }
+
+    console.log(
+      opts.write
+        ? `Wrote ${plan.batches.length} file(s).`
+        : `Dry run — nothing written. Pass --write to apply ${plan.batches.length} file(s).`
+    );
+    if (anyRejected) process.exitCode = 1;
   });
 
 program.parseAsync(process.argv);

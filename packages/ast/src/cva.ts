@@ -80,3 +80,23 @@ export function getVariantOptionInitializer(info: CvaCallInfo, group: string, op
   if (!optionProp || !Node.isPropertyAssignment(optionProp)) return undefined;
   return optionProp.getInitializer();
 }
+
+/**
+ * Every `cva(...)` call in a file, by the variable it's assigned to —
+ * `findCvaCall` needs a `varName` up front (the validator and applier
+ * always have one, named in the op itself), but the generator (Phase 4)
+ * has to discover which variables in a file are cva calls at all before
+ * it can do anything with them. Re-checks each candidate variable
+ * declaration through `findCvaCall` rather than a separate tree walk —
+ * one more tree walk per file is not worth a second implementation to
+ * keep in sync with the first.
+ */
+export function findAllCvaCalls(sourceFile: SourceFile): { varName: string; info: CvaCallInfo }[] {
+  const results: { varName: string; info: CvaCallInfo }[] = [];
+  for (const varDecl of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+    const varName = varDecl.getName();
+    const info = findCvaCall(sourceFile, varName);
+    if (info) results.push({ varName, info });
+  }
+  return results;
+}

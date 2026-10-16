@@ -11,6 +11,7 @@
   "dependencies": {
     "@revamp/ast": "0.0.1",
     "@revamp/core": "0.0.1",
+    "@revamp/generator": "0.0.1",
     "commander": "^12.1.0",
     "diff": "^5.2.2"
   },

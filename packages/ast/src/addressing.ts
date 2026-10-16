@@ -102,6 +102,29 @@ export function attributesHolder(node: JsxElement | JsxSelfClosingElement): JsxO
   return Node.isJsxSelfClosingElement(node) ? node : node.getOpeningElement();
 }
 
+/**
+ * A node's current `className`, if — and only if — it's a plain string
+ * literal: `undefined` for a fragment, a missing attribute, a spread, or a
+ * dynamic expression (`className={cn(...)}`). Deliberately collapses
+ * "there isn't one" and "there's one but it's dynamic" into the same
+ * `undefined` — exactly right for a read-only "do I have something safe to
+ * work with" question, which is what a design generator walking every
+ * element asks. The validator and applier each need a finer-grained
+ * version of this same check (they have to tell "absent — add one" apart
+ * from "dynamic — refuse", which this collapses on purpose), so they keep
+ * their own slightly different logic rather than being refactored onto
+ * this; this lives here anyway because it belongs next to
+ * `attributesHolder`, not because every className-reading call site shares
+ * one implementation.
+ */
+export function getStaticClassName(node: Node): string | undefined {
+  if (!Node.isJsxElement(node) && !Node.isJsxSelfClosingElement(node)) return undefined;
+  const attr = attributesHolder(node).getAttribute("className");
+  if (!attr || !Node.isJsxAttribute(attr)) return undefined;
+  const init = attr.getInitializer();
+  return init && Node.isStringLiteral(init) ? init.getLiteralValue() : undefined;
+}
+
 function childKindLabel(node: Node): string {
   if (isJsxNode(node)) return `element:${tagNameOf(node)}`;
   if (Node.isJsxExpression(node)) return "expr";

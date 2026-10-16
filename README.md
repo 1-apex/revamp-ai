@@ -5,13 +5,13 @@ coherent, accessible UI — under a hard guarantee that not one line of
 application logic changes.
 
 Full spec and 9-phase build order (design docs, not code) were written
-before this repo existed; this repo is Phase 0 through Phase 3 of that
+before this repo existed; this repo is Phase 0 through Phase 4 of that
 plan, actually built and tested, not just described. See `docs/`
 (gitignored, local-only — not part of this repo's history) for the
 long-form writeup of each phase: what was built, why specific decisions
 were made, and what was found and fixed along the way.
 
-**Status: Phase 0 through Phase 3 complete.** Phase 0 is the safety
+**Status: Phase 0 through Phase 4 complete.** Phase 0 is the safety
 instrument everything else gets built on: a way to scan a React project
 and prove, with a hash, that a later change did or didn't touch its
 logic. Phase 1 is the edit-op safety layer built on top of it: node
@@ -23,14 +23,15 @@ belongs to. Phase 2 is the integration layer: a second fixture,
 (`@revamp/mcp`) that surfaces the same four operations — scan, list
 addresses, validate, apply — as tools a host agent calls directly, over
 stdio, instead of only reachable by importing the packages or shelling
-out to the CLI. Phase 3 is the skill pack this project's own one-line
-description promised: an AI-driven Claude Code skill (`/revamp`) that
-drives those four tools end-to-end — deciding a design direction, then
-discovering addresses, previewing, and landing edits one file at a time —
-rather than a second, deterministic design-system generator (see
-`docs/phase-3-skill-pack.md` for why that tradeoff was made explicitly).
-There is still no deterministic generator — that's Phase 4+, if it's
-ever built.
+out to the CLI. Phase 3 is the AI-driven skill pack this project's own
+one-line description promised (`/revamp`). Phase 4 is that skill's
+deterministic sibling: `@revamp/generator` picks a design direction with
+no AI involved (three named presets, chosen by matching the product brief
+against operational/consumer signal words) and mechanically re-hues
+colors and normalizes radius values across a project — fully
+unit-tested, every generated batch proven against the real
+`validateEditBatch`/`applyEditBatch`, the same as every other package
+here. `revamp generate` on the CLI drives it end-to-end.
 
 ## What's here
 
@@ -73,7 +74,7 @@ packages/
            shadcn/ui), finds every component and route, classifies JSX
            elements by role, and infers a product brief from
            package.json / README / route names. Never writes anything.
-  cli/     three commands, together the harness every phase gets tested
+  cli/     four commands, together the harness every phase gets tested
            against without needing an AI in the loop:
              - `revamp scan <path>` — prints what core+ast find.
              - `revamp addresses <file> <component>` — lists every
@@ -86,6 +87,11 @@ packages/
                default (prints a unified diff via the `diff` package,
                writes nothing); `--write` actually lands it. `--json` on
                any command prints the raw result instead of a summary.
+             - `revamp generate <path>` — runs `@revamp/generator`
+               end-to-end: scan, pick a direction, build batches, preview
+               (or `--write`) every one. No AI, no network, no MCP server
+               needed — the same "provable without an AI in the loop"
+               philosophy `revamp scan` established for Phase 0.
   mcp/     an MCP server (`bin/revamp-mcp.js`, stdio) wrapping the exact
            same four operations as four tools: `scan_project`,
            `list_addresses`, `validate_batch`, `apply_batch` (the last
@@ -98,6 +104,25 @@ packages/
            directory isn't something the calling host agent can see.
            `apply_batch`'s `write` defaults to `false`, the same
            default-safe posture as the CLI's `--write` flag.
+  generator/ the deterministic design-direction generator (Phase 4) — no AI,
+           fully unit-tested. `pickDirection(scan)` matches the product
+           brief against a small set of signal words and picks one of
+           three named presets (`operational`/`consumer`/`calm`); for
+           every static `className` and every `cva()` call it finds,
+           `remapClassName` re-hues color utilities (same prefix, same
+           shade number — preserving whatever contrast decision was
+           already made, just changing the hue family) and normalizes
+           non-`rounded-full` radius utilities to the preset's one
+           canonical value. Never touches a dynamic className
+           (`cn(...)`, same refuse-to-guess rule as the validator), a
+           layout/spacing utility, or a variant-prefixed one
+           (`hover:`/`focus:`/`dark:` — a documented v1 gap, not an
+           oversight). Emits ordinary `EditBatch` values — nothing
+           bypasses validation; `generate.test.ts` proves every batch it
+           produces against the real `validateEditBatch`/`applyEditBatch`,
+           not just its own bookkeeping. `revamp generate <path>` on the
+           CLI drives it end-to-end (dry-run diff by default, `--write`
+           to commit, same posture as `revamp apply`).
 fixtures/
   fleet-dashboard/   one hand-authored React + Tailwind v4 + shadcn-style
                      fixture (a dashboard with real hooks, real handlers,
@@ -136,6 +161,8 @@ node packages/cli/dist/bin/revamp.js scan ./fixtures/fleet-dashboard
 node packages/cli/dist/bin/revamp.js addresses ./fixtures/fleet-dashboard/src/routes/FleetDashboard.tsx FleetDashboard
 node packages/cli/dist/bin/revamp.js apply my-batch.json       # dry-run diff
 node packages/cli/dist/bin/revamp.js apply my-batch.json --write
+node packages/cli/dist/bin/revamp.js generate ./fixtures/fleet-dashboard          # no AI, dry-run diff
+node packages/cli/dist/bin/revamp.js generate ./fixtures/fleet-dashboard --write
 ```
 
 To run the MCP server directly (reads/writes JSON-RPC over stdio — not
@@ -173,18 +200,19 @@ tools end-to-end: decide a design direction, then discover addresses,
 preview, and land edits one file at a time, never touching a file any
 other way.
 
-Run the safety tests — these ARE the Phase 0/1/2 stop-and-checks from the
+Run the safety tests — these ARE the Phase 0-4 stop-and-checks from the
 build plan, not a separate afterthought:
 
 ```
 cd packages/ast && npx vitest run
 cd packages/core && npx vitest run
+cd packages/generator && npx vitest run
 cd packages/mcp && npx vitest run
 ```
 
-99 tests across seven files (83 in `@revamp/ast`, 5 in `@revamp/core`,
-11 in `@revamp/mcp`), and each one is a specific claim, not a vague
-"it works":
+126 tests across ten files (83 in `@revamp/ast`, 5 in `@revamp/core`,
+27 in `@revamp/generator`, 11 in `@revamp/mcp`), and each one is a
+specific claim, not a vague "it works":
 
 **`logicSkeleton.test.ts` (8 tests) — the hash:**
 - Prettier reformatting (default config, and a very different one —
@@ -315,6 +343,36 @@ on the handler functions directly:**
   disk untouched (read back and compared byte-for-byte), `write: true`
   actually writes it, and a rejected batch writes nothing regardless of
   `write`
+
+**`@revamp/generator` (27 tests across three files) — the deterministic
+design-direction generator:**
+- `direction.test.ts` (5 tests): the operational/consumer/calm presets are
+  picked by matching the product brief against signal words, the fallback
+  is a genuine third option rather than a reused default, picking is
+  deterministic (same brief, same preset, always), and operational signals
+  are checked — and win — before consumer ones when a brief could
+  arguably match both
+- `tailwindTokens.test.ts` (12 tests): a neutral/accent/danger-family color
+  utility re-hues to the right direction family at the *same* prefix and
+  shade (preserving whatever contrast decision was already made); a token
+  already matching the direction is left alone (never a same-value
+  "replacement"); every non-`rounded-full` radius utility normalizes to
+  the direction's one canonical value, `rounded-full` itself never does;
+  layout/spacing utilities, arbitrary values, and variant-prefixed
+  utilities (`hover:`/`focus:`/`dark:` — confirmed against the real
+  fixture's own `hover:bg-slate-800`) are all left untouched, on purpose
+- `generate.test.ts` (10 tests) — the test that actually matters: **every
+  batch generated against both real fixtures is fed through the real
+  `validateEditBatch` and `applyEditBatch`**, not asserted correct by
+  reading the generator's own code. Specific, hand-verified cases: Badge's
+  accent/danger variants re-hue but its already-slate `idle` variant
+  doesn't move; Button's base radius normalizes while its
+  already-slate/variant-prefixed utilities don't; `card.tsx` gets no
+  batch at all (everything in it already matches); the single-argument
+  `cva({...})` form (`IconButton`) is handled with no `base` field;
+  `input.tsx` gets no batch either, because its own className is
+  `cn(...)` — exactly as dynamic as every shadcn primitive's own root
+  element, correctly left alone
 
 If any of the "never moves" / "tolerated" tests goes red, the fix is in
 the hash or the fingerprint, never in the test. If a "always moves" /
@@ -464,13 +522,13 @@ care — see `docs/phase-1-edit-safety-layer.md` for the full reasoning:
   produced inside a `.map()` callback isn't addressable yet — Phase 1b
   work if it turns out to matter in practice.
 
-## What Phase 2 and Phase 3 built (see the build-order doc)
+## What Phases 2 through 4 built (see the build-order doc)
 
-Phase 0, Phase 1, Phase 2, and Phase 3 are all done: scan → hash →
-address → validate → apply, reachable from a terminal (`revamp`), from a
-host agent (`@revamp/mcp`), or driven end-to-end by an LLM (`/revamp`),
-with two fixtures exercised at every layer. What Phase 2 built, in the
-order it was built:
+Phase 0 through Phase 4 are all done: scan → hash → address → validate →
+apply, reachable from a terminal (`revamp`), from a host agent
+(`@revamp/mcp`), driven end-to-end by an LLM (`/revamp`), or driven
+end-to-end with no AI at all (`revamp generate`) — with two fixtures
+exercised at every layer. What Phase 2 built, in the order it was built:
 
 - ~~a second fixture~~ **done** (`fixtures/inventory-panel/`) — chosen
   specifically to hit patterns `fleet-dashboard` doesn't (see "What's
@@ -540,8 +598,25 @@ Phase 3 — the skill pack (`.claude/skills/revamp/`) — **done**:
   named honestly rather than hidden (this phase's correctness isn't
   verifiable by a test suite the way Phases 0-2's was).
 
-Phase 4+ — not started, out of scope for this phase:
+Phase 4 — the deterministic generator (`@revamp/generator`) — **done**,
+built as the AI-driven skill's sibling rather than its replacement, exactly
+the option Phase 3 left open: picks one of three named presets
+(`pickDirection`, matched against the product brief's own signal words,
+deterministic — same brief, same preset, always), then mechanically
+re-hues every color utility it finds (same prefix, same shade number —
+preserving whatever contrast decision was already made) and normalizes
+radius values, across both `className`s and `cva()` calls. Unlike Phase 3,
+this phase's correctness IS verifiable by a test suite — 27 tests, the
+most important of which feed every batch generated against both real
+fixtures through the real `validateEditBatch`/`applyEditBatch` rather than
+trusting the generator's own bookkeeping. `revamp generate` on the CLI
+proves it end-to-end the same way `revamp apply` proved the applier.
+Full design writeup (why three presets and not an open palette space, the
+same-prefix-same-shade re-hueing trick, the variant-prefix limitation
+found by testing against the real fixture, not planned for) in
+docs/phase-4-generator.md.
 
-- a deterministic design-system-generator package, if one ever turns out
-  to be worth building alongside the AI-driven skill rather than instead
-  of it
+Nothing further is currently planned beyond Phase 4. The original 9-phase
+build order's remaining phases were never read by whoever has been
+building this (see the top of this README) — if there's more to build,
+it isn't reflected here yet.

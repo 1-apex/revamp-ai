@@ -7,11 +7,13 @@ export {
   resolveAddress,
   loadSourceFile,
   createInMemoryProject,
+  getStaticClassName,
   type EditAddress,
   type AddressableNode,
   type ResolveResult,
   type ResolveFailure,
 } from "./addressing.js";
+export { findCvaCall, findAllCvaCalls, cvaVariantKeys, getVariantOptionInitializer, type CvaCallInfo } from "./cva.js";
 export {
   EditAddressSchema,
   SetClassListOpSchema,
