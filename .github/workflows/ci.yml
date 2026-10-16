@@ -1,0 +1,39 @@
+name: CI
+
+# Runs the exact sequence every phase in this project has been verified
+# against by hand throughout its build: a clean install, a full build
+# (workspace packages consume each other's *built* dist/ output, not raw
+# source — see package.json's "main" fields — so build must run before
+# test, not just before publish), the full vitest suite across every
+# package, then a cheap smoke test of the two CLI commands that don't need
+# a JSON batch file or a running MCP client to exercise meaningfully.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - name: Smoke test the CLI against both fixtures
+        run: |
+          set -e
+          node packages/cli/dist/bin/revamp.js scan ./fixtures/fleet-dashboard
+          node packages/cli/dist/bin/revamp.js scan ./fixtures/inventory-panel
+          node packages/cli/dist/bin/revamp.js generate ./fixtures/fleet-dashboard
+          node packages/cli/dist/bin/revamp.js generate ./fixtures/inventory-panel

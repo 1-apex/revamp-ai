@@ -616,7 +616,23 @@ same-prefix-same-shade re-hueing trick, the variant-prefix limitation
 found by testing against the real fixture, not planned for) in
 docs/phase-4-generator.md.
 
-Nothing further is currently planned beyond Phase 4. The original 9-phase
+## CI
+
+`.github/workflows/ci.yml` runs on every push/PR to `main`/`master`: a
+clean `npm ci`, a full `npm run build` (workspace packages consume each
+other's *built* `dist/` output via their own `package.json` `main` field,
+not raw source — build has to run before test, not just before publish),
+the complete `npm test` across all four packages, then a smoke test of
+`revamp scan`/`revamp generate` against both fixtures — the two CLI
+commands that exercise meaningfully without a JSON batch file or a
+running MCP client. The exact sequence was run by hand first (including a
+from-scratch `npm ci` against the committed lockfile) to confirm it works
+before being written into the workflow, not assumed from the YAML syntax
+alone. No separate phase doc for this one — it's a small, mechanical
+addition (wire up commands already proven; no new judgment calls), not a
+phase-sized decision the way 0 through 4 were.
+
+Nothing further is currently planned beyond this. The original 9-phase
 build order's remaining phases were never read by whoever has been
 building this (see the top of this README) — if there's more to build,
 it isn't reflected here yet.
